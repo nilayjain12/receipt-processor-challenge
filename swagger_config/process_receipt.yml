@@ -1,0 +1,76 @@
+components:
+  schemas:
+    Receipt:
+      type: object
+      required:
+        - retailer
+        - purchaseDate
+        - purchaseTime
+        - items
+        - total
+      properties:
+        retailer:
+          description: The name of the retailer or store the receipt is from.
+          type: string
+          example: "M&M Corner Market"
+        purchaseDate:
+          description: The date of the purchase printed on the receipt.
+          type: string
+          format: date
+          example: "2023-06-25"
+        purchaseTime:
+          description: The time of the purchase printed on the receipt. 24-hour time expected.
+          type: string
+          format: time
+          example: "13:30"
+        items:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/Item"
+        total:
+          description: The total amount paid on the receipt.
+          type: string
+          example: "16.48"
+
+    Item:
+      type: object
+      required:
+        - shortDescription
+        - price
+      properties:
+        shortDescription:
+          description: The Short Product Description for the item.
+          type: string
+          example: "Item 1"
+        price:
+          description: The total price paid for this item.
+          type: string
+          example: "10.99"
+
+paths:
+  /receipts/process:
+    post:
+      summary: Submits a receipt for processing
+      description: Submits a receipt for processing
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Receipt"
+      responses:
+        200:
+          description: Returns the ID assigned to the receipt
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - id
+                properties:
+                  id:
+                    type: string
+                    example: adb6b560-0eef-42bc-9d16-df48f30e89b2
+        400:
+          description: The receipt is invalid

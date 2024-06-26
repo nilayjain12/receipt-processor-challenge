@@ -1,114 +1,307 @@
 from flask import Flask, request, jsonify
-from flask_expects_json import expects_json
-from datetime import datetime
-from math import ceil
 import uuid
-import os
+import re
+from flasgger import Swagger, swag_from
 
 app = Flask(__name__)
-
-
-schema = {
-    "type": "object",
-    "properties": {
-        "retailer": {"type": "string"},
-        "purchaseDate": {"type": "string"},
-        "purchaseTime": {"type": "string"},
-        "total": {"type": "string"},
-        "items": {
-            "type": "array",
-            "minItems": 1,
-            "items": {
-                "type": "object",
-                "properties": {
-                    "shortDescription": {"type": "string"},
-                    "price": {"type": "string"},
-                },
-                "required": ["shortDescription", "price"],
-            },
-        },
-    },
-    "required": ["retailer", "purchaseDate", "purchaseTime", "total", "items"],
-}
+#swagger = Swagger(app)
 
 receipts = {}
 
+swagger_template = {
+    "components": {
+        "schemas": {
+            "Receipt": {
+                "type": "object",
+                "required": [
+                    "retailer",
+                    "purchaseDate",
+                    "purchaseTime",
+                    "items",
+                    "total"
+                ],
+                "properties": {
+                    "retailer": {
+                        "description": "The name of the retailer or store the receipt is from.",
+                        "type": "string",
+                        "pattern": "^[\\w\\s\\-&]+$",
+                        "example": "M&M Corner Market"
+                    },
+                    "purchaseDate": {
+                        "description": "The date of the purchase printed on the receipt.",
+                        "type": "string",
+                        "format": "date",
+                        "example": "2022-01-01"
+                    },
+                    "purchaseTime": {
+                        "description": "The time of the purchase printed on the receipt. 24-hour time expected.",
+                        "type": "string",
+                        "format": "time",
+                        "example": "13:01"
+                    },
+                    "items": {
+                        "type": "array",
+                        "minItems": 1,
+                        "items": {
+                            "$ref": "#/components/schemas/Item"
+                        }
+                    },
+                    "total": {
+                        "description": "The total amount paid on the receipt.",
+                        "type": "string",
+                        "pattern": "^\\d+\\.\\d{2}$",
+                        "example": "6.49"
+                    }
+                }
+            },
+            "Item": {
+                "type": "object",
+                "required": [
+                    "shortDescription",
+                    "price"
+                ],
+                "properties": {
+                    "shortDescription": {
+                        "description": "The Short Product Description for the item.",
+                        "type": "string",
+                        "pattern": "^[\\w\\s\\-]+$",
+                        "example": "Mountain Dew 12PK"
+                    },
+                    "price": {
+                        "description": "The total price paid for this item.",
+                        "type": "string",
+                        "pattern": "^\\d+\\.\\d{2}$",
+                        "example": "6.49"
+                    }
+                }
+            }
+        }
+    }
+}
 
-@app.route("/receipts/list", methods=["GET"])
-def get_receipts():
-    return jsonify(receipts)
+swagger = Swagger(app, template=swagger_template)
 
+@app.route('/receipts/process', methods=['POST'])
+@swag_from({
+    'summary': 'Submits a receipt for processing',
+    'description': 'Submits a receipt for processing',
+    'requestBody': {
+        'required': True,
+        'content': {
+            'application/json': {
+                'schema': {
+                    '$ref': '#/components/schemas/Receipt'
+                }
+            }
+        }
+    },
+    'responses': {
+        '200': {
+            'description': 'Returns the ID assigned to the receipt',
+            'content': {
+                'application/json': {
+                    'schema': {
+                        'type': 'object',
+                        'properties': {
+                            'id': {
+                                'type': 'string',
+                                'example': 'adb6b560-0eef-42bc-9d16-df48f30e89b2'
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        '400': {
+            'description': 'The receipt is invalid',
+            'content': {
+                'application/json': {
+                    'schema': {
+                        'type': 'object',
+                        'properties': {
+                            'error': {
+                                'type': 'string',
+                                'example': 'Invalid receipt format'
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        '422': {
+            'description': 'Unprocessable entity due to validation error',
+            'content': {
+                'application/json': {
+                    'schema': {
+                        'type': 'object',
+                        'properties': {
+                            'error': {
+                                'type': 'string',
+                                'example': 'Validation error: retailer format is incorrect'
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+})
 
-@app.route("/receipts/process", methods=["POST"])
-@expects_json(schema)
 def process_receipt():
-    if request.method == "POST":
-        data = request.get_json()
-        receipt_id = str(uuid.uuid4())
-        try:
-            data["points"] = calculate_points(data)
-        except ValueError as e:
-            return {
-                "ERROR": "Invalid Receipt",
-                "MESSAGE": str(e),
-            }, 400
-        receipts[receipt_id] = data
-        return {"id": receipt_id}, 200
+    receipt = request.json
+    is_valid, error_message = validate_receipt(receipt)
 
+    if not is_valid:
+        if error_message.startswith("Invalid"):
+            return jsonify({"error": error_message}), 400
+        else:
+            return jsonify({"error": error_message}), 422
 
-@app.route("/receipts/<receipt_id>/points", methods=["GET"])
-def get_receipt_points(receipt_id):
-    try:
-        return {"points": receipts[receipt_id]["points"]}, 200
-    except KeyError as e:
-        return {
-            "ERROR": "Receipt Not Found",
-            "MESSAGE": f"Receipt ID {e.args[0]} does not exist.",
-        }, 404
+    receipt_id = str(uuid.uuid4())
+    points = calculate_points(receipt)
+    receipts[receipt_id] = points
+    return jsonify({"id": receipt_id})
 
+@app.route('/receipts/<id>/points', methods=['GET'])
+@swag_from({
+    'summary': 'Returns the points awarded for the receipt',
+    'description': 'Returns the points awarded for the receipt',
+    'parameters': [
+        {
+            'name': 'id',
+            'in': 'path',
+            'required': True,
+            'description': 'The ID of the receipt',
+            'schema': {
+                'type': 'string',
+                'example': 'adb6b560-0eef-42bc-9d16-df48f30e89b2'
+            }
+        }
+    ],
+    'responses': {
+        '200': {
+            'description': 'The number of points awarded',
+            'content': {
+                'application/json': {
+                    'schema': {
+                        'type': 'object',
+                        'properties': {
+                            'points': {
+                                'type': 'integer',
+                                'example': 100
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        '404': {
+            'description': 'No receipt found for that id',
+            'content': {
+                'application/json': {
+                    'schema': {
+                        'type': 'object',
+                        'properties': {
+                            'error': {
+                                'type': 'string',
+                                'example': 'Receipt not found'
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+})
+def get_points(id):
+    if id in receipts:
+        return jsonify({"points": receipts[id]})
+    else:
+        return jsonify({"error": "Receipt not found"}), 404
 
-def calculate_points(receipt_json):
-    # Keep track of total points
-    points_total = 0
+def validate_receipt(receipt):
+    required_fields = ['retailer', 'purchaseDate', 'purchaseTime', 'items', 'total']
+    for field in required_fields:
+        if field not in receipt:
+            return False, f"Invalid receipt format: missing {field}"
 
-    # 1 point for each alphanumeric char in the retailer name
-    for char in receipt_json["retailer"]:
-        if char.isalnum():
-            points_total += 1
+    if not re.match(r'^[\w\s\-&]+$', receipt['retailer']):
+        return False, "Validation error: retailer format is incorrect"
 
-    # 50 points if total is round dollar amount
-    if float(receipt_json["total"]).is_integer():
-        points_total += 50
+    if not re.match(r'^\d{4}-\d{2}-\d{2}$', receipt['purchaseDate']):
+        return False, "Validation error: purchaseDate format is incorrect"
 
-    # 25 points if total is a multiple of 0.25
-    if float(receipt_json["total"]) % 0.25 == 0:
-        points_total += 25
+    if not re.match(r'^\d{2}:\d{2}$', receipt['purchaseTime']):
+        return False, "Validation error: purchaseTime format is incorrect"
 
-    # 5 points for every 2 items on the receipt
-    points_total += (len(receipt_json["items"]) // 2) * 5
+    if not re.match(r'^\d+\.\d{2}$', receipt['total']):
+        return False, "Validation error: total format is incorrect"
 
-    # Trimmed length of item description is a multiple of 3,
+    if not isinstance(receipt['items'], list) or len(receipt['items']) < 1:
+        return False, "Validation error: items must be a non-empty list"
+
+    for item in receipt['items']:
+        is_valid, error_message = validate_item(item)
+        if not is_valid:
+            return False, error_message
+
+    return True, None
+
+def validate_item(item):
+    required_fields = ['shortDescription', 'price']
+    for field in required_fields:
+        if field not in item:
+            return False, f"Validation error: missing {field} in item"
+
+    if not re.match(r'^[\w\s\-]+$', item['shortDescription']):
+        return False, "Validation error: shortDescription format is incorrect"
+
+    if not re.match(r'^\d+\.\d{2}$', item['price']):
+        return False, "Validation error: price format is incorrect"
+
+    return True, None
+
+def calculate_points(receipt):
+    points = 0
+    retailer = receipt['retailer']
+    total = float(receipt['total'])
+    items = receipt['items']
+    purchase_date = receipt['purchaseDate']
+    purchase_time = receipt['purchaseTime']
+
+    # Rule 1: One point for every alphanumeric character in the retailer name
+    points += sum(1 for char in retailer if char.isalnum())
+
+    # Rule 2: 50 points if the total is a round dollar amount
+    if total.is_integer():
+        points += 50
+
+    # Rule 3: 25 points if the total is a multiple of 0.25
+    if total % 0.25 == 0:
+        points += 25
+
+    # Rule 4: 5 points for every two items on the receipt
+    points += (len(items) // 2) * 5
+
+    # Rule 5: If the trimmed length of the item description is a multiple of 3, 
     # multiply the price by 0.2 and round up to the nearest integer
-    # Then add that to the points.
-    for item in receipt_json["items"]:
-        if len(item["shortDescription"].strip()) % 3 == 0:
-            points_total += ceil(float(item["price"]) * 0.2)
+    for item in items:
+        description = item['shortDescription'].strip()
+        price = float(item['price'])
+        if len(description) % 3 == 0:
+            points += int(price * 0.2 + 0.99)
 
-    # 6 points if the day in the purchase date is odd
-    purchase_date = datetime.strptime(receipt_json["purchaseDate"], "%Y-%m-%d")
-    if int(purchase_date.day) % 2 != 0:
-        points_total += 6
+    # Rule 6: 6 points if the day in the purchase date is odd
+    day = int(purchase_date.split('-')[2])
+    if day % 2 != 0:
+        points += 6
 
-    # 10 points if the time of purchase is after 2:00pm and before 4:00pm
-    start_time = datetime.strptime("14:00", "%H:%M")
-    end_time = datetime.strptime("16:00", "%H:%M")
-    purchase_time = datetime.strptime(receipt_json["purchaseTime"], "%H:%M")
-    if start_time < purchase_time < end_time:
-        points_total += 10
+    # Rule 7: 10 points if the time of purchase is between 2:00pm and 4:00pm
+    hour, minute = map(int, purchase_time.split(':'))
+    if 14 <= hour < 16:
+        points += 10
 
-    return points_total
+    return points
 
-
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(debug=False, host="0.0.0.0", port=port)
+if __name__ == '__main__':
+    app.run(debug=True)
