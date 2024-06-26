@@ -7,6 +7,7 @@ This is a Flask-based API for processing receipts and calculating points based o
 1. **Swagger API Documentation**: Comprehensive project documentation using Swagger.
 2. **Docker Support**: Includes a Dockerfile for easy containerization.
 3. **HTTP Error Handling**: Covers popular HTTP error codes in the project.
+4. **Unit Testing**: Added unit test cases for the code.
 
 ## How to Run the Project [Environment Setup]
 
