@@ -72,3 +72,10 @@ curl -X POST "http://127.0.0.1:5000/receipts/process" -H "Content-Type: applicat
     ],
     "total": "6.49"
 }'
+```
+
+## Running Unit Tests
+Run the tests using the command:<br>
+```
+python -m unittest test_app.py
+```
