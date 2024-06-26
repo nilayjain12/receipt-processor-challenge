@@ -36,7 +36,7 @@ This is a Flask-based API for processing receipts and calculating points based o
 
 4. **Run the Flask application:**
     ```bash
-    flask run
+    python .\app.py 
     ```
 
     The API will be available at `http://127.0.0.1:5000`.
